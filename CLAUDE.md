@@ -1,5 +1,18 @@
 # CLAUDE.md — Research Assistant Agent
 
+> **PRE-BUILD SPEC** — This file is intentionally verbose because the source files
+> don't exist yet. It contains full code snippets to guide initial implementation.
+>
+> **Switch condition:** Once every file listed in Section 3 exists, `python main.py`
+> runs end-to-end without errors, and at least one report has been generated in
+> `reports/` — replace this file with `CLAUDE.slim.md`:
+> ```bash
+> mv CLAUDE.slim.md CLAUDE.md
+> ```
+> After the switch, delete `CLAUDE.slim.md` (it will have become `CLAUDE.md`).
+> The slim version is ~70 lines and covers only what Claude Code needs during
+> ongoing development, not what it needed to build from scratch.
+
 This file is the authoritative technical reference for building this project.
 Read it fully before writing any code. Follow the specs exactly.
 
