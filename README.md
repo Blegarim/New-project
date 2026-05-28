@@ -170,3 +170,30 @@ Some ideas once you understand the base:
 
 This is a learning experiment, not production software. See `CLAUDE.md` for the
 full technical specification.
+
+### Build Progress (per CLAUDE.md §13 implementation order)
+
+| # | Component                              | Status        | Notes |
+|---|----------------------------------------|---------------|-------|
+| 1 | `config/settings.py`                   | Done          | env loading via pydantic-settings |
+| 2 | `tools/search.py`                      | Done          | standalone test not yet logged |
+| 3 | `tools/fetch_page.py`                  | Done          | standalone test not yet logged |
+| 4 | `tools/wikipedia.py`                   | Done          | standalone test not yet logged |
+| 5 | `tools/file_ops.py`                    | Done          | standalone test not yet logged |
+| 6 | `tools/registry.py` (schemas+dispatch) | Done          | — |
+| 7 | `models/claude_client.py`              | Code written, **live API call not verified** | needs real `ANTHROPIC_API_KEY`; see file header for acceptance steps |
+| 8 | `agent/memory.py`                      | Not started   | — |
+| 9 | `agent/planner.py`                     | Not started   | — |
+| 10 | `agent/core.py` (ReAct loop)          | Not started   | — |
+| 11 | `main.py`                             | Stub only     | current file is a 5-byte placeholder; needs CLAUDE.md §9 impl |
+
+### Open TODOs
+
+- Run Session 4 acceptance test with a real `ANTHROPIC_API_KEY` to confirm
+  `claude_client.py` actually round-trips with `TOOL_SCHEMAS`.
+- Log a quick standalone sanity check for each of the four tools
+  (search, fetch_page, wikipedia, file_ops) so we know they work before the
+  agent loop integrates them.
+- Implement remaining files in order (memory → planner → core → main).
+- End-to-end check: `python main.py "<question>"` produces a file in `reports/`.
+  Only then can `CLAUDE.md` be swapped for `CLAUDE.slim.md` per the spec header.
