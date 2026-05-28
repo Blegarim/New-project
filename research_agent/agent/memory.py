@@ -6,7 +6,8 @@ class Memory:
         self.messages.append({"role": "user", "content": text})
 
     def add_assistant(self, content: list):
-        # content is the raw list from Message.content (may include tool_use blocks)
+        # content is a canonical list of dicts: {"type": "text"|"tool_use", ...}
+        # Adapters translate this into provider-native format at call time.
         self.messages.append({"role": "assistant", "content": content})
 
     def add_tool_result(self, tool_use_id: str, result: str):

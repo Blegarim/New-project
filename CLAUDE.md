@@ -45,12 +45,18 @@ agent/core.py  (ReAct loop)                                            │
     │                                                                   │
     ├──► agent/planner.py  (system prompt + initial plan)              │
     │                                                                   │
-    ├──► agent/memory.py   (message history + context trimming)        │
+    ├──► agent/memory.py   (canonical message history)                 │
     │                                                                   │
-    ├──► models/claude_client.py  (Anthropic API, tool_use)            │
+    ├──► models/factory.py  → models/provider.py (LLMProvider)         │
+    │         │                                                         │
+    │         ├── adapters/anthropic_adapter.py  (Anthropic native)    │
+    │         └── adapters/openai_adapter.py     (OpenAI-compatible:   │
+    │                                              Groq, Cerebras,     │
+    │                                              OpenRouter, Ollama, │
+    │                                              OpenAI)             │
     │         │                                                         │
     │         ▼                                                         │
-    │    [Claude decides which tool to call]                            │
+    │    [LLM decides which tool to call → NormalizedResponse]          │
     │         │                                                         │
     └──► tools/registry.py  (dispatches to the right tool)             │
               │                                                         │
@@ -88,7 +94,12 @@ research_agent/          ← all source code lives here
 │   └── file_ops.py      ← save_report / read_file
 ├── models/
 │   ├── __init__.py
-│   └── claude_client.py ← thin wrapper around anthropic.Anthropic
+│   ├── provider.py      ← LLMProvider Protocol + ContentBlock + NormalizedResponse
+│   ├── factory.py       ← picks an adapter from settings.provider
+│   └── adapters/
+│       ├── __init__.py
+│       ├── anthropic_adapter.py  ← Anthropic native
+│       └── openai_adapter.py     ← OpenAI-compatible (Groq, Cerebras, …)
 ├── config/
 │   └── settings.py      ← pydantic-settings config from .env
 reports/                 ← generated markdown reports land here (git-ignored)
@@ -104,7 +115,9 @@ requirements.txt
 
 | Tool           | API / Library              | Key Required | Notes                                      |
 |----------------|----------------------------|--------------|--------------------------------------------|
-| LLM brain      | Anthropic Claude API       | Yes (ANTHROPIC_API_KEY) | Use `claude-haiku-4-5` to keep costs low |
+| LLM brain      | Anthropic Claude API       | Yes (ANTHROPIC_API_KEY) | Default; `claude-haiku-4-5` keeps costs low |
+| LLM brain (free) | Groq, Cerebras (OpenAI-compatible) | Free key   | Set `PROVIDER=openai_compat` + `BASE_URL`   |
+| LLM brain (local) | Ollama (OpenAI-compatible) | None        | `BASE_URL=http://localhost:11434/v1`        |
 | Web search     | `duckduckgo-search` package | No           | pip package, no account needed            |
 | Page reader    | Jina AI Reader             | No           | GET `https://r.jina.ai/<url>` → markdown  |
 | Encyclopedia   | `wikipedia` package        | No           | pip package wrapping Wikipedia REST API   |
@@ -114,57 +127,116 @@ requirements.txt
 
 ## 5. Config Layer — `research_agent/config/settings.py`
 
-Use `pydantic-settings` to load `.env` values.
+Use `pydantic-settings` to load `.env` values. The `provider` field selects
+the LLM backend; credentials for all supported providers live side-by-side
+so swapping is a one-line `.env` change.
 
 ```python
+from typing import Literal
 from pydantic_settings import BaseSettings
 
 class Settings(BaseSettings):
-    anthropic_api_key: str
+    provider: Literal["anthropic", "openai_compat"] = "anthropic"
+
+    anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    base_url: str | None = None    # OpenAI-compatible: Groq, Cerebras, Ollama, …
+
     model: str = "claude-haiku-4-5-20251001"
     max_tokens: int = 4096
-    max_loop_iterations: int = 10    # safety cap on the ReAct loop
+    max_loop_iterations: int = 10
     reports_dir: str = "reports"
     jina_base_url: str = "https://r.jina.ai/"
 
     class Config:
         env_file = ".env"
+        extra = "ignore"
 
 settings = Settings()
 ```
 
-`.env.example` must contain:
-```
-ANTHROPIC_API_KEY=your_key_here
-```
+`.env.example` shows both provider configurations; see Section 11.
 
 ---
 
-## 6. Model Layer — `research_agent/models/claude_client.py`
+## 6. Provider Layer — `research_agent/models/`
 
-Thin wrapper. Responsible only for making the API call and returning the raw response.
-Does NOT handle tool dispatch or loop logic.
+The provider layer is the plug-and-play LLM abstraction. `core.py` only ever
+sees a canonical (Anthropic-style) message format and a `NormalizedResponse`.
+Each adapter owns translation in and out of its provider-native format.
+
+### 6.1 Canonical Interface — `models/provider.py`
 
 ```python
-import anthropic
-from research_agent.config.settings import settings
+from dataclasses import dataclass
+from typing import Any, Literal, Protocol
 
-client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
+@dataclass
+class ContentBlock:
+    type: Literal["text", "tool_use"]
+    text: str | None = None
+    id: str | None = None
+    name: str | None = None
+    input: dict | None = None
 
-def call_claude(messages: list[dict], tools: list[dict], system: str) -> anthropic.types.Message:
-    return client.messages.create(
-        model=settings.model,
-        max_tokens=settings.max_tokens,
-        system=system,
-        tools=tools,
-        messages=messages,
-    )
+    def to_dict(self) -> dict:
+        if self.type == "text":
+            return {"type": "text", "text": self.text}
+        if self.type == "tool_use":
+            return {"type": "tool_use", "id": self.id, "name": self.name,
+                    "input": self.input or {}}
+
+@dataclass
+class NormalizedResponse:
+    stop_reason: Literal["tool_use", "end_turn", "max_tokens", "stop"]
+    content: list[ContentBlock]
+    raw: Any = None
+
+class LLMProvider(Protocol):
+    def call(self, messages: list[dict], tools: list[dict], system: str
+             ) -> NormalizedResponse: ...
 ```
 
-Key points:
-- Always pass `tools` so Claude can call them.
-- `system` is the full system prompt (built by `planner.py`).
-- Return the raw `Message` object; let `core.py` inspect `stop_reason` and `content`.
+### 6.2 Factory — `models/factory.py`
+
+```python
+from research_agent.config.settings import settings
+from research_agent.models.provider import LLMProvider
+
+def get_provider() -> LLMProvider:
+    name = settings.provider
+    if name == "anthropic":
+        from research_agent.models.adapters.anthropic_adapter import AnthropicAdapter
+        return AnthropicAdapter()
+    if name == "openai_compat":
+        from research_agent.models.adapters.openai_adapter import OpenAICompatAdapter
+        return OpenAICompatAdapter()
+    raise ValueError(f"Unknown provider: {name!r}")
+```
+
+Adapters import lazily so a missing optional dep (e.g. `openai` not installed)
+never breaks the alternate path.
+
+### 6.3 Anthropic Adapter — `models/adapters/anthropic_adapter.py`
+
+Passthrough. Canonical format matches Anthropic's wire format, so messages and
+tools go through untouched; only the response object is normalized into
+`ContentBlock`s.
+
+### 6.4 OpenAI-compatible Adapter — `models/adapters/openai_adapter.py`
+
+Translates in both directions:
+
+- **Outbound messages**: assistant `tool_use` blocks → `assistant.tool_calls`;
+  user `tool_result` blocks → `role: "tool"` messages with `tool_call_id`.
+- **Outbound tools**: `{name, description, input_schema}` →
+  `{type: "function", function: {name, description, parameters}}`.
+- **Inbound response**: `message.content` → text block; `message.tool_calls` →
+  `tool_use` blocks (arguments JSON-parsed). `finish_reason == "tool_calls"`
+  maps to `stop_reason = "tool_use"`.
+
+One adapter covers OpenAI, Groq, Cerebras, OpenRouter, Together, Fireworks,
+and Ollama — anything that speaks the OpenAI Chat Completions API.
 
 ---
 
@@ -404,26 +476,27 @@ This is the heart of the agent. Implements the **ReAct** pattern:
 ```python
 from research_agent.agent.memory import Memory
 from research_agent.agent.planner import build_system_prompt
-from research_agent.models.claude_client import call_claude
-from research_agent.tools.registry import TOOL_SCHEMAS, dispatch
 from research_agent.config.settings import settings
+from research_agent.models.factory import get_provider
+from research_agent.tools.registry import TOOL_SCHEMAS, dispatch
 
 def run_agent(question: str) -> dict:
     memory = Memory()
     system = build_system_prompt(question)
+    provider = get_provider()
     memory.add_user(f"Please research the following question: {question}")
 
     for iteration in range(settings.max_loop_iterations):
         print(f"\n[Loop {iteration + 1}/{settings.max_loop_iterations}]")
 
-        response = call_claude(
+        response = provider.call(
             messages=memory.get(),
             tools=TOOL_SCHEMAS,
-            system=system
+            system=system,
         )
 
-        # Add the assistant's response to memory (raw content list)
-        memory.add_assistant(response.content)
+        # Serialize canonical ContentBlocks → dicts for memory.
+        memory.add_assistant([b.to_dict() for b in response.content])
 
         # Check stop reason
         if response.stop_reason == "end_turn":
@@ -510,6 +583,7 @@ if __name__ == "__main__":
 
 ```
 anthropic>=0.40.0
+openai>=1.0.0
 pydantic-settings>=2.0.0
 duckduckgo-search>=6.0.0
 requests>=2.31.0
@@ -522,9 +596,25 @@ python-dotenv>=1.0.0
 ## 11. `.env.example`
 
 ```
+# Provider selection: "anthropic" or "openai_compat"
+PROVIDER=anthropic
+MODEL=claude-haiku-4-5-20251001
+
+# --- Anthropic (PROVIDER=anthropic) ---
 ANTHROPIC_API_KEY=your_anthropic_api_key_here
+
+# --- OpenAI-compatible (PROVIDER=openai_compat) ---
+# Works with OpenAI, Groq, Cerebras, OpenRouter, Together, Fireworks, Ollama.
+# Free options:
+#   Groq:     BASE_URL=https://api.groq.com/openai/v1      MODEL=llama-3.3-70b-versatile
+#   Cerebras: BASE_URL=https://api.cerebras.ai/v1          MODEL=llama-3.3-70b
+#   Ollama:   BASE_URL=http://localhost:11434/v1           MODEL=qwen2.5:7b
+# Paid:
+#   OpenAI:   BASE_URL=                                    MODEL=gpt-4o-mini
+# OPENAI_API_KEY=
+# BASE_URL=
+
 # Optional overrides:
-# MODEL=claude-haiku-4-5-20251001
 # MAX_LOOP_ITERATIONS=10
 ```
 
@@ -552,10 +642,12 @@ Build in this order to allow incremental testing at each step:
 4. `research_agent/tools/wikipedia.py` → test standalone
 5. `research_agent/tools/file_ops.py` → test standalone
 6. `research_agent/tools/registry.py` (schemas + dispatcher)
-7. `research_agent/models/claude_client.py` → test with a simple message (no tools yet)
+7. `research_agent/models/provider.py` → `models/adapters/anthropic_adapter.py` →
+   `models/adapters/openai_adapter.py` → `models/factory.py` (test each adapter
+   in isolation with a simple message before wiring into the loop)
 8. `research_agent/agent/memory.py`
 9. `research_agent/agent/planner.py`
-10. `research_agent/agent/core.py` — the full loop
+10. `research_agent/agent/core.py` — the full loop, using `get_provider()`
 11. `main.py`
 
 ---
@@ -574,6 +666,15 @@ and it handles JS-rendered pages. The free tier is sufficient for experiments.
 Haiku is the fastest and cheapest Claude model. For a research loop that may
 make 5–10 API calls, cost matters. Switch to Sonnet in settings if deeper
 reasoning is needed.
+
+**Why a provider Protocol + adapter pattern?**
+The agent loop should not know which LLM it's talking to. Defining a
+`LLMProvider` Protocol with a `NormalizedResponse` keeps `core.py` provider-
+agnostic; adding a new backend means one adapter file, not edits across the
+codebase. Memory stores messages in the canonical (Anthropic-style) dict
+format; each adapter translates only at call time. The OpenAI-compatible
+adapter covers OpenAI, Groq, Cerebras, OpenRouter, Together, Fireworks, and
+Ollama with a single implementation — they all speak the same wire format.
 
 **Why truncate `fetch_page` to 8000 chars?**
 Claude's context window is large but each fetched page added to message history
