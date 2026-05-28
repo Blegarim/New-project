@@ -112,7 +112,7 @@ requirements.txt
 
 ---
 
-## 5. Config Layer — `config/settings.py`
+## 5. Config Layer — `research_agent/config/settings.py`
 
 Use `pydantic-settings` to load `.env` values.
 
@@ -140,14 +140,14 @@ ANTHROPIC_API_KEY=your_key_here
 
 ---
 
-## 6. Model Layer — `models/claude_client.py`
+## 6. Model Layer — `research_agent/models/claude_client.py`
 
 Thin wrapper. Responsible only for making the API call and returning the raw response.
 Does NOT handle tool dispatch or loop logic.
 
 ```python
 import anthropic
-from config.settings import settings
+from research_agent.config.settings import settings
 
 client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
@@ -170,7 +170,7 @@ Key points:
 
 ## 7. Tools Layer
 
-### 7.1 Tool Schema Definitions — `tools/registry.py`
+### 7.1 Tool Schema Definitions — `research_agent/tools/registry.py`
 
 All tool schemas follow the Anthropic `tool_use` format exactly.
 Define them as a list of dicts. The dispatcher maps tool names to functions.
@@ -241,10 +241,10 @@ TOOL_SCHEMAS = [
 The dispatcher in `registry.py`:
 
 ```python
-from tools.search import search_web
-from tools.fetch_page import fetch_page
-from tools.wikipedia import lookup_wikipedia
-from tools.file_ops import save_report
+from research_agent.tools.search import search_web
+from research_agent.tools.fetch_page import fetch_page
+from research_agent.tools.wikipedia import lookup_wikipedia
+from research_agent.tools.file_ops import save_report
 
 TOOL_FUNCTIONS = {
     "search_web": search_web,
@@ -261,7 +261,7 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
     return fn(**tool_input)
 ```
 
-### 7.2 `tools/search.py`
+### 7.2 `research_agent/tools/search.py`
 
 ```python
 from duckduckgo_search import DDGS
@@ -279,7 +279,7 @@ def search_web(query: str, num_results: int = 5) -> str:
     return json.dumps(results, indent=2)
 ```
 
-### 7.3 `tools/fetch_page.py`
+### 7.3 `research_agent/tools/fetch_page.py`
 
 Jina Reader turns any URL into clean markdown via a simple GET request.
 No API key needed for basic usage (rate-limited but sufficient for experiments).
@@ -301,7 +301,7 @@ def fetch_page(url: str) -> str:
     return text[:8000] + "\n\n[TRUNCATED]" if len(text) > 8000 else text
 ```
 
-### 7.4 `tools/wikipedia.py`
+### 7.4 `research_agent/tools/wikipedia.py`
 
 ```python
 import wikipedia
@@ -317,11 +317,11 @@ def lookup_wikipedia(topic: str) -> str:
         return f"No Wikipedia page found for '{topic}'."
 ```
 
-### 7.5 `tools/file_ops.py`
+### 7.5 `research_agent/tools/file_ops.py`
 
 ```python
 import os
-from config.settings import settings
+from research_agent.config.settings import settings
 
 def save_report(filename: str, content: str) -> str:
     os.makedirs(settings.reports_dir, exist_ok=True)
@@ -336,7 +336,7 @@ def save_report(filename: str, content: str) -> str:
 
 ## 8. Agent Layer
 
-### 8.1 Memory — `agent/memory.py`
+### 8.1 Memory — `research_agent/agent/memory.py`
 
 Manages the message history list passed to the Anthropic API.
 Handles both regular messages and tool result messages.
@@ -372,7 +372,7 @@ class Memory:
 `tool_use` blocks, the next `user` message must contain `tool_result` blocks
 with matching `tool_use_id`s. The loop in `core.py` enforces this.
 
-### 8.2 Planner — `agent/planner.py`
+### 8.2 Planner — `research_agent/agent/planner.py`
 
 Builds the system prompt. The system prompt is the agent's "personality" and instructions.
 
@@ -396,17 +396,17 @@ def build_system_prompt(question: str) -> str:
     return SYSTEM_PROMPT + f"\n\nResearch question: {question}"
 ```
 
-### 8.3 Core Loop — `agent/core.py`
+### 8.3 Core Loop — `research_agent/agent/core.py`
 
 This is the heart of the agent. Implements the **ReAct** pattern:
 **Re**ason (Claude thinks) → **Act** (call a tool) → **Observe** (get result) → repeat.
 
 ```python
-from agent.memory import Memory
-from agent.planner import build_system_prompt
-from models.claude_client import call_claude
-from tools.registry import TOOL_SCHEMAS, dispatch
-from config.settings import settings
+from research_agent.agent.memory import Memory
+from research_agent.agent.planner import build_system_prompt
+from research_agent.models.claude_client import call_claude
+from research_agent.tools.registry import TOOL_SCHEMAS, dispatch
+from research_agent.config.settings import settings
 
 def run_agent(question: str) -> dict:
     memory = Memory()
@@ -546,16 +546,16 @@ __pycache__/
 
 Build in this order to allow incremental testing at each step:
 
-1. `config/settings.py` — verify env loading works
-2. `tools/search.py` → test standalone: `python -c "from tools.search import search_web; print(search_web('Python agent'))"`
-3. `tools/fetch_page.py` → test standalone
-4. `tools/wikipedia.py` → test standalone
-5. `tools/file_ops.py` → test standalone
-6. `tools/registry.py` (schemas + dispatcher)
-7. `models/claude_client.py` → test with a simple message (no tools yet)
-8. `agent/memory.py`
-9. `agent/planner.py`
-10. `agent/core.py` — the full loop
+1. `research_agent/config/settings.py` — verify env loading works
+2. `research_agent/tools/search.py` → test standalone: `python -c "from research_agent.tools.search import search_web; print(search_web('Python agent'))"`
+3. `research_agent/tools/fetch_page.py` → test standalone
+4. `research_agent/tools/wikipedia.py` → test standalone
+5. `research_agent/tools/file_ops.py` → test standalone
+6. `research_agent/tools/registry.py` (schemas + dispatcher)
+7. `research_agent/models/claude_client.py` → test with a simple message (no tools yet)
+8. `research_agent/agent/memory.py`
+9. `research_agent/agent/planner.py`
+10. `research_agent/agent/core.py` — the full loop
 11. `main.py`
 
 ---
