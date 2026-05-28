@@ -27,7 +27,7 @@ class ContentBlock:
 
 @dataclass
 class NormalizedResponse:
-    stop_reason: Literal["tool_use", "end_turn", "max_tokens", "stop"]
+    stop_reason: Literal["tool_use", "end_turn", "max_tokens", "stop_sequence", "stop"]
     content: list[ContentBlock]
     raw: Any = None
 

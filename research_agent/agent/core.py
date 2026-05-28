@@ -22,37 +22,43 @@ def run_agent(question: str) -> dict:
 
         memory.add_assistant([b.to_dict() for b in response.content])
 
-        if response.stop_reason == "end_turn":
+        if response.stop_reason != "tool_use":
             text = next((b.text for b in response.content if b.type == "text"), "")
-            print(f"[Agent] Unexpected end_turn: {text[:200]}")
-            break
+            print(
+                f"[Agent] Stopped without tool_use "
+                f"(stop_reason={response.stop_reason}): {text[:200]}"
+            )
+            return {
+                "text": text,
+                "stop_reason": response.stop_reason,
+                "iterations": iteration + 1,
+            }
 
-        if response.stop_reason == "tool_use":
-            tool_calls = [b for b in response.content if b.type == "tool_use"]
+        tool_calls = [b for b in response.content if b.type == "tool_use"]
 
-            for tool_call in tool_calls:
-                tool_name = tool_call.name
-                tool_input = tool_call.input or {}
-                tool_id = tool_call.id
+        for tool_call in tool_calls:
+            tool_name = tool_call.name
+            tool_input = tool_call.input or {}
+            tool_id = tool_call.id
 
-                print(f"[Tool] {tool_name}({tool_input})")
+            print(f"[Tool] {tool_name}({tool_input})")
 
-                if tool_name == "final_answer":
-                    print(f"\n[Done] {tool_input['summary']}")
-                    print(f"[Report] {tool_input['report_path']}")
-                    memory.add_tool_result(tool_id, "Research complete.")
-                    return {
-                        "summary": tool_input["summary"],
-                        "report_path": tool_input["report_path"],
-                        "iterations": iteration + 1,
-                    }
+            if tool_name == "final_answer":
+                print(f"\n[Done] {tool_input['summary']}")
+                print(f"[Report] {tool_input['report_path']}")
+                memory.add_tool_result(tool_id, "Research complete.")
+                return {
+                    "summary": tool_input["summary"],
+                    "report_path": tool_input["report_path"],
+                    "iterations": iteration + 1,
+                }
 
-                try:
-                    result = dispatch(tool_name, tool_input)
-                except Exception as e:
-                    result = f"Error running {tool_name}: {e}"
+            try:
+                result = dispatch(tool_name, tool_input)
+            except Exception as e:
+                result = f"Error running {tool_name}: {e}"
 
-                print(f"[Result] {str(result)[:150]}...")
-                memory.add_tool_result(tool_id, result)
+            print(f"[Result] {str(result)[:150]}...")
+            memory.add_tool_result(tool_id, result)
 
     return {"error": "Max iterations reached without a final answer."}

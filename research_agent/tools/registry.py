@@ -1,3 +1,5 @@
+import inspect
+
 from research_agent.tools.search import search_web
 from research_agent.tools.fetch_page import fetch_page
 from research_agent.tools.wikipedia import lookup_wikipedia
@@ -76,4 +78,6 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
     fn = TOOL_FUNCTIONS.get(tool_name)
     if fn is None:
         raise ValueError(f"Unknown or non-dispatchable tool: {tool_name}")
-    return fn(**tool_input)
+    params = inspect.signature(fn).parameters
+    kwargs = {k: v for k, v in tool_input.items() if k in params}
+    return fn(**kwargs)

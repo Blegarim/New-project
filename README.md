@@ -120,8 +120,8 @@ a full research run on `claude-haiku-4-5` costs roughly **$0.001–$0.005**.
 
 ```bash
 # 1. Clone and enter the project
-git clone https://github.com/Blegarim/New-project
-cd New-project
+git clone https://github.com/blegarim/new-project
+cd new-project
 
 # 2. Create a virtual environment
 python -m venv .venv
